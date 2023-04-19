@@ -75,7 +75,7 @@ async fn initiate_upload_handler(
     let file = tokio::fs::OpenOptions::new()
         .write(true)
         .create_new(true)
-        .open(format!("/tmp/{}.tmp", id))
+        .open(format!("/tmp/{}", upload_request.fileName))
         .await
         .map_err(|e| {
             warp::reject::custom(InternalErr {
@@ -202,6 +202,7 @@ mod tests {
     #[tokio::test]
     async fn test_upload_single_large_file_and_verify() {
         const PORT: u16 = 3030;
+        const FILENAME: &str = "test-file.txt";
         let uploads = Arc::new(Mutex::new(HashMap::new()));
         let server_uploads = uploads.clone();
         let _ = thread::spawn(move || {
@@ -218,7 +219,7 @@ mod tests {
         let client = Client::new();
         let random_data = generate_random_data(FILE_SIZE, rng);
 
-        let id = initiate_upload(PORT, &client, FILE_SIZE as u64, "test_file.txt".to_string())
+        let id = initiate_upload(PORT, &client, FILE_SIZE as u64, FILENAME.to_string())
             .await
             .unwrap();
         upload_file_in_chunks(
@@ -234,7 +235,7 @@ mod tests {
         .unwrap();
 
         // Read the uploaded file from the server
-        let uploaded_file_path = format!("/tmp/{}.tmp", id);
+        let uploaded_file_path = format!("/tmp/{}", FILENAME);
         let uploaded_data = read(uploaded_file_path).await.unwrap();
 
         // Compare the original data with the uploaded data
@@ -260,6 +261,7 @@ mod tests {
             .map(|i| {
                 thread::spawn(move || {
                     let rt = tokio::runtime::Runtime::new().unwrap();
+                    let file_name: String = format!("test-{}.txt", i);
                     rt.block_on(async {
                         println!("task {} starting", i);
                         let rng = Rng::new();
@@ -270,7 +272,7 @@ mod tests {
                             PORT,
                             &client,
                             FILE_SIZE as u64,
-                            format!("test-{}.txt", i),
+                            file_name.clone(),
                         )
                         .await
                         .unwrap();
@@ -287,7 +289,7 @@ mod tests {
                         .await
                         .unwrap();
                         println!("task {} completed upload", i);
-                        let uploaded_file_path = format!("/tmp/{}.tmp", id);
+                        let uploaded_file_path = format!("/tmp/{}", file_name.clone());
                         let uploaded_data = read(uploaded_file_path).await.unwrap();
                         assert_eq!(random_data, uploaded_data);
                     })
