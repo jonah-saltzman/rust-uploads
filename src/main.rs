@@ -157,12 +157,12 @@ mod tests {
     use fastrand::Rng;
     use reqwest::Client;
     use std::thread;
-    use tokio::{task, fs::read};
+    use tokio::fs::read;
 
-    const FILE_SIZE: usize = 10 * 1024 * 1024; // 100mb
-    const CHUNK_SIZE: usize = 1 * 1024 * 1024; // 10mb
+    const FILE_SIZE: usize = 100 * 1024 * 1024; // 100mb
+    const CHUNK_SIZE: usize = 10 * 1024 * 1024; // 10mb
 
-    const NUM_TASKS: i32 = 50;
+    const NUM_TASKS: i32 = 10;
 
     #[tokio::test]
     async fn test_upload_single_large_file_and_verify() {
@@ -196,7 +196,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_upload_large_files() {
+    async fn test_upload_many_large_files_and_verify() {
         const PORT: u16 = 3031;
         let uploads: Uploads = Arc::new(Mutex::new(HashMap::new()));
         let upload_clone = uploads.clone();
@@ -213,26 +213,29 @@ mod tests {
         // create 10 tasks to upload files concurrently
         let tasks: Vec<_> = (0..NUM_TASKS)
             .map(|i| {
-                task::spawn(async move {
-                    println!("task {} starting", i);
-                    let rng = Rng::new();
-                    let client = Client::new();
-                    let random_data = generate_random_data(FILE_SIZE, rng);
-                    println!("task {} generated data", i);
-                    let id = initiate_upload(PORT, &client, FILE_SIZE as u64, format!("test-{}.txt", i)).await.unwrap();
-                    println!("task {} initiated upload", i);
-                    upload_file_in_chunks(PORT, &client, &id, &random_data, FILE_SIZE as u64, CHUNK_SIZE, i).await.unwrap();
-                    println!("task {} completed upload", i);
-                    let uploaded_file_path = format!("/tmp/{}.tmp", id);
-                    let uploaded_data = read(uploaded_file_path).await.unwrap();
-                    assert_eq!(random_data, uploaded_data);
+                thread::spawn(move || {
+                    let rt = tokio::runtime::Runtime::new().unwrap();
+                    rt.block_on(async {
+                        println!("task {} starting", i);
+                        let rng = Rng::new();
+                        let client = Client::new();
+                        let random_data = generate_random_data(FILE_SIZE, rng);
+                        println!("task {} generated data", i);
+                        let id = initiate_upload(PORT, &client, FILE_SIZE as u64, format!("test-{}.txt", i)).await.unwrap();
+                        println!("task {} initiated upload", i);
+                        upload_file_in_chunks(PORT, &client, &id, &random_data, FILE_SIZE as u64, CHUNK_SIZE, i).await.unwrap();
+                        println!("task {} completed upload", i);
+                        let uploaded_file_path = format!("/tmp/{}.tmp", id);
+                        let uploaded_data = read(uploaded_file_path).await.unwrap();
+                        assert_eq!(random_data, uploaded_data);
+                    })
                 })
             })
             .collect();
 
         // Wait for all tasks to finish
         for t in tasks {
-            t.await.unwrap();
+            t.join().unwrap();
         }
     }
 
