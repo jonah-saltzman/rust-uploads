@@ -1,23 +1,23 @@
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::sync::{Arc};
+use std::sync::Arc;
+use tokio::fs::File;
+use tokio::io::{AsyncSeekExt, AsyncWriteExt};
+use tokio::sync::Mutex;
+use uuid::Uuid;
 use warp::body::BodyDeserializeError;
 use warp::reject::Reject;
-use warp::{Filter, Rejection, Reply, reply, http::StatusCode};
-use uuid::Uuid;
-use tokio::fs::File;
-use tokio::io::{AsyncWriteExt, AsyncSeekExt};
-use tokio::sync::Mutex;
-use serde::{Serialize, Deserialize};
+use warp::{http::StatusCode, reply, Filter, Rejection, Reply};
 
 type Uploads = Arc<Mutex<HashMap<Uuid, File>>>;
 
 #[derive(Debug)]
 struct BadRequest {
-    message: String
+    message: String,
 }
 #[derive(Debug)]
 struct InternalErr {
-    message: String
+    message: String,
 }
 
 impl Reject for BadRequest {}
@@ -27,13 +27,13 @@ impl Reject for InternalErr {}
 #[allow(non_snake_case)]
 struct CreateUploadReq {
     fileSize: u64,
-    fileName: String
+    fileName: String,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
 #[allow(non_snake_case)]
 struct CreateUploadRes {
-    id: String
+    id: String,
 }
 
 #[tokio::main]
@@ -45,7 +45,6 @@ async fn main() {
 }
 
 async fn run_server(uploads: Uploads, port: u16) -> tokio::io::Result<()> {
-
     let uploads = warp::any().map(move || uploads.clone());
 
     let initiate_upload = warp::path!("upload")
@@ -72,22 +71,29 @@ async fn initiate_upload_handler(
     upload_request: CreateUploadReq,
     uploads: Uploads,
 ) -> Result<impl Reply, Rejection> {
-
     let id = Uuid::new_v4();
     let file = tokio::fs::OpenOptions::new()
         .write(true)
         .create_new(true)
         .open(format!("/tmp/{}.tmp", id))
         .await
-        .map_err(|e| warp::reject::custom(InternalErr{message: e.to_string()}))?;
+        .map_err(|e| {
+            warp::reject::custom(InternalErr {
+                message: e.to_string(),
+            })
+        })?;
 
     let file = file.into_std().await;
-    file.set_len(upload_request.fileSize).map_err(|e| warp::reject::custom(InternalErr{message: e.to_string()}))?;
+    file.set_len(upload_request.fileSize).map_err(|e| {
+        warp::reject::custom(InternalErr {
+            message: e.to_string(),
+        })
+    })?;
     let file = File::from_std(file);
 
     uploads.lock().await.insert(id, file);
 
-    Ok(warp::reply::json(&CreateUploadRes{id: id.to_string()}))
+    Ok(warp::reply::json(&CreateUploadRes { id: id.to_string() }))
 }
 
 async fn upload_chunk_handler(
@@ -99,22 +105,44 @@ async fn upload_chunk_handler(
 ) -> Result<impl Reply, Rejection> {
     println!("{:?}", std::thread::current().id());
     if content_id != format!("{}", id) {
-        return Err(warp::reject::custom(BadRequest{message: "Content-Id doesn't match".to_string()}));
+        return Err(warp::reject::custom(BadRequest {
+            message: "Content-Id doesn't match".to_string(),
+        }));
     }
 
-    let (start, _) = parse_content_range(&content_range)
-        .ok_or_else(|| warp::reject::custom(BadRequest{message: "Invalid Content-Range header".to_string()}))?;
+    let (start, _) = parse_content_range(&content_range).ok_or_else(|| {
+        warp::reject::custom(BadRequest {
+            message: "Invalid Content-Range header".to_string(),
+        })
+    })?;
 
     let mut uploads = uploads.lock().await;
     let file = uploads
         .get_mut(&id)
         .ok_or_else(|| warp::reject::not_found())?;
 
-    file.seek(std::io::SeekFrom::Start(start)).await.map_err(|e| warp::reject::custom(InternalErr{message: e.to_string()}))?;
-    file.write_all(&chunk).await.map_err(|e| warp::reject::custom(InternalErr{message: e.to_string()}))?;
-    file.flush().await.map_err(|e| warp::reject::custom(InternalErr{message: e.to_string()}))?;
+    file.seek(std::io::SeekFrom::Start(start))
+        .await
+        .map_err(|e| {
+            warp::reject::custom(InternalErr {
+                message: e.to_string(),
+            })
+        })?;
+    file.write_all(&chunk).await.map_err(|e| {
+        warp::reject::custom(InternalErr {
+            message: e.to_string(),
+        })
+    })?;
+    file.flush().await.map_err(|e| {
+        warp::reject::custom(InternalErr {
+            message: e.to_string(),
+        })
+    })?;
 
-    Ok(warp::reply::with_status("Chunk uploaded successfully", warp::http::StatusCode::OK))
+    Ok(warp::reply::with_status(
+        "Chunk uploaded successfully",
+        warp::http::StatusCode::OK,
+    ))
 }
 
 async fn handle_rejection(err: Rejection) -> Result<impl Reply, std::convert::Infallible> {
@@ -125,12 +153,18 @@ async fn handle_rejection(err: Rejection) -> Result<impl Reply, std::convert::In
         Ok(reply::with_status("BAD_REQUEST", StatusCode::BAD_REQUEST))
     } else if let Some(e) = err.find::<InternalErr>() {
         eprintln!("server err: {}", e.message);
-        Ok(reply::with_status("INTERNAL_SERVER_ERROR", StatusCode::INTERNAL_SERVER_ERROR))
-    } else if let Some(_) = err.find::<BodyDeserializeError>() {
+        Ok(reply::with_status(
+            "INTERNAL_SERVER_ERROR",
+            StatusCode::INTERNAL_SERVER_ERROR,
+        ))
+    } else if err.find::<BodyDeserializeError>().is_some() {
         Ok(reply::with_status("BAD_REQUEST", StatusCode::BAD_REQUEST))
     } else {
         eprintln!("unhandled rejection: {:?}", err);
-        Ok(reply::with_status("INTERNAL_SERVER_ERROR", StatusCode::INTERNAL_SERVER_ERROR))
+        Ok(reply::with_status(
+            "INTERNAL_SERVER_ERROR",
+            StatusCode::INTERNAL_SERVER_ERROR,
+        ))
     }
 }
 
@@ -154,10 +188,10 @@ fn parse_content_range(content_range: &str) -> Option<(u64, u64)> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::time::Duration;
     use fastrand::Rng;
     use reqwest::Client;
     use std::thread;
+    use std::time::Duration;
     use tokio::fs::read;
 
     const FILE_SIZE: usize = 50 * 1024 * 1024; // 50mb
@@ -167,7 +201,6 @@ mod tests {
 
     #[tokio::test]
     async fn test_upload_single_large_file_and_verify() {
-        
         const PORT: u16 = 3030;
         let uploads = Arc::new(Mutex::new(HashMap::new()));
         let server_uploads = uploads.clone();
@@ -185,8 +218,20 @@ mod tests {
         let client = Client::new();
         let random_data = generate_random_data(FILE_SIZE, rng);
 
-        let id = initiate_upload(PORT, &client, FILE_SIZE as u64, "test_file.txt".to_string()).await.unwrap();
-        upload_file_in_chunks(PORT, &client, &id, &random_data, FILE_SIZE as u64, CHUNK_SIZE, 1).await.unwrap();
+        let id = initiate_upload(PORT, &client, FILE_SIZE as u64, "test_file.txt".to_string())
+            .await
+            .unwrap();
+        upload_file_in_chunks(
+            PORT,
+            &client,
+            &id,
+            &random_data,
+            FILE_SIZE as u64,
+            CHUNK_SIZE,
+            1,
+        )
+        .await
+        .unwrap();
 
         // Read the uploaded file from the server
         let uploaded_file_path = format!("/tmp/{}.tmp", id);
@@ -210,7 +255,6 @@ mod tests {
 
         thread::sleep(Duration::from_secs(1));
 
-
         // create 10 tasks to upload files concurrently
         let tasks: Vec<_> = (0..NUM_TASKS)
             .map(|i| {
@@ -222,9 +266,26 @@ mod tests {
                         let client = Client::new();
                         let random_data = generate_random_data(FILE_SIZE, rng);
                         println!("task {} generated data", i);
-                        let id = initiate_upload(PORT, &client, FILE_SIZE as u64, format!("test-{}.txt", i)).await.unwrap();
+                        let id = initiate_upload(
+                            PORT,
+                            &client,
+                            FILE_SIZE as u64,
+                            format!("test-{}.txt", i),
+                        )
+                        .await
+                        .unwrap();
                         println!("task {} initiated upload", i);
-                        upload_file_in_chunks(PORT, &client, &id, &random_data, FILE_SIZE as u64, CHUNK_SIZE, i).await.unwrap();
+                        upload_file_in_chunks(
+                            PORT,
+                            &client,
+                            &id,
+                            &random_data,
+                            FILE_SIZE as u64,
+                            CHUNK_SIZE,
+                            i,
+                        )
+                        .await
+                        .unwrap();
                         println!("task {} completed upload", i);
                         let uploaded_file_path = format!("/tmp/{}.tmp", id);
                         let uploaded_data = read(uploaded_file_path).await.unwrap();
@@ -240,8 +301,16 @@ mod tests {
         }
     }
 
-    async fn initiate_upload(port: u16, client: &Client, file_size: u64, file_name: String) -> Result<Uuid, reqwest::Error> {
-        let body = CreateUploadReq{fileName: file_name, fileSize: file_size};
+    async fn initiate_upload(
+        port: u16,
+        client: &Client,
+        file_size: u64,
+        file_name: String,
+    ) -> Result<Uuid, reqwest::Error> {
+        let body = CreateUploadReq {
+            fileName: file_name,
+            fileSize: file_size,
+        };
         let response = client
             .post(format!("http://localhost:{}/upload", port))
             .json(&body)
