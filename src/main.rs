@@ -97,6 +97,7 @@ async fn upload_chunk_handler(
     chunk: bytes::Bytes,
     uploads: Uploads,
 ) -> Result<impl Reply, Rejection> {
+    println!("{:?}", std::thread::current().id());
     if content_id != format!("{}", id) {
         return Err(warp::reject::custom(BadRequest{message: "Content-Id doesn't match".to_string()}));
     }
@@ -159,10 +160,10 @@ mod tests {
     use std::thread;
     use tokio::fs::read;
 
-    const FILE_SIZE: usize = 100 * 1024 * 1024; // 100mb
-    const CHUNK_SIZE: usize = 10 * 1024 * 1024; // 10mb
+    const FILE_SIZE: usize = 50 * 1024 * 1024; // 50mb
+    const CHUNK_SIZE: usize = 5 * 1024 * 1024; // 5mb
 
-    const NUM_TASKS: i32 = 10;
+    const NUM_TASKS: i32 = 100;
 
     #[tokio::test]
     async fn test_upload_single_large_file_and_verify() {
