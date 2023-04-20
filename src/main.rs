@@ -116,10 +116,11 @@ async fn upload_chunk_handler(
         })
     })?;
 
-    let mut uploads = uploads.lock().await;
-    let file = uploads
-        .get_mut(&id)
-        .ok_or_else(|| warp::reject::not_found())?;
+    let mut file = {
+        let mut uploads = uploads.lock().await;
+        let file = uploads.get_mut(&id).ok_or_else(|| warp::reject::not_found())?;
+        file.try_clone().await.map_err(|e| warp::reject::custom(InternalErr{message: e.to_string()}))?
+    };
 
     file.seek(std::io::SeekFrom::Start(start))
         .await
